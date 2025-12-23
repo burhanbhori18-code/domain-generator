@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: domain-generator
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app --timeout 120 --log-level debug"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0

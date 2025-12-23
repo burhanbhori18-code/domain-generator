@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Domain File Generator - Madison Logic</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <h1>Madison Logic</h1>
+                <p class="tagline">Domain File Generator</p>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Info Card -->
+            <div class="info-card">
+                <h2>📋 How to Use</h2>
+                <ol>
+                    <li><strong>Download</strong> the sample Excel template</li>
+                    <li><strong>Fill in</strong> your TAL names, countries, and campaign names (Sheet1)</li>
+                    <li><strong>Add domains</strong> to the campaign sheets (one sheet per campaign)</li>
+                    <li><strong>Upload</strong> your completed file</li>
+                    <li><strong>Download</strong> the generated domain files organized by campaign as a ZIP</li>
+                </ol>
+            </div>
+
+            <!-- Template Download -->
+            <div class="action-section">
+                <h3>Step 1: Download Template</h3>
+                <a href="/download-template" class="btn btn-primary" download>
+                    <span class="icon">📥</span>
+                    Download Sample Template
+                </a>
+            </div>
+
+            <!-- File Upload -->
+            <div class="action-section">
+                <h3>Step 2: Upload Your File</h3>
+                <div class="upload-area" id="uploadArea">
+                    <input type="file" id="fileInput" accept=".xlsx,.xls" hidden>
+                    <div class="upload-content">
+                        <span class="upload-icon">☁️</span>
+                        <p class="upload-text">Drag & drop your Excel file here</p>
+                        <p class="upload-subtext">or</p>
+                        <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                            Browse Files
+                        </button>
+                        <p class="file-info">Accepted formats: .xlsx, .xls</p>
+                    </div>
+                    <div class="selected-file" id="selectedFile" style="display: none;">
+                        <span class="file-name" id="fileName"></span>
+                        <button class="btn-remove" onclick="clearFile()">✕</button>
+                    </div>
+                </div>
+                <button class="btn btn-success" id="uploadBtn" onclick="uploadFile()" disabled>
+                    <span class="icon">🚀</span>
+                    Process File
+                </button>
+            </div>
+
+            <!-- Progress Indicator -->
+            <div class="progress-section" id="progressSection" style="display: none;">
+                <div class="spinner"></div>
+                <p class="progress-text">Processing your file...</p>
+            </div>
+
+            <!-- Results Section -->
+            <div class="results-section" id="resultsSection" style="display: none;">
+                <div class="results-card success">
+                    <h3>✅ Success!</h3>
+                    <p id="resultsMessage"></p>
+                    <a href="#" id="downloadLink" class="btn btn-primary">
+                        <span class="icon">📦</span>
+                        Download ZIP File
+                    </a>
+                </div>
+            </div>
+
+            <!-- Error Section -->
+            <div class="results-section" id="errorSection" style="display: none;">
+                <div class="results-card error">
+                    <h3>❌ Error</h3>
+                    <p id="errorMessage"></p>
+                    <button class="btn btn-secondary" onclick="resetForm()">Try Again</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>© 2025 Madison Logic. All rights reserved.</p>
+        </footer>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const selectedFileDiv = document.getElementById('selectedFile');
+        const fileName = document.getElementById('fileName');
+        const progressSection = document.getElementById('progressSection');
+        const resultsSection = document.getElementById('resultsSection');
+        const errorSection = document.getElementById('errorSection');
+
+        // Drag and drop handlers
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-over');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+
+        // File input handler
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        function handleFileSelect(file) {
+            if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
+                showError('Please select an Excel file (.xlsx or .xls)');
+                return;
+            }
+
+            fileInput.files = createFileList(file);
+            fileName.textContent = file.name;
+            selectedFileDiv.style.display = 'flex';
+            uploadArea.querySelector('.upload-content').style.display = 'none';
+            uploadBtn.disabled = false;
+        }
+
+        function createFileList(file) {
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+            return dataTransfer.files;
+        }
+
+        function clearFile() {
+            fileInput.value = '';
+            selectedFileDiv.style.display = 'none';
+            uploadArea.querySelector('.upload-content').style.display = 'flex';
+            uploadBtn.disabled = true;
+            resetSections();
+        }
+
+        function uploadFile() {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // Show progress
+            resetSections();
+            progressSection.style.display = 'block';
+            uploadBtn.disabled = true;
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .then(data => {
+                    progressSection.style.display = 'none';
+
+                    if (data.error) {
+                        showError(data.error);
+                    } else {
+                        showResults(data.message, data.download_url);
+                    }
+                })
+                .catch(error => {
+                    progressSection.style.display = 'none';
+                    showError('An unexpected error occurred. Please try again.');
+                    console.error('Error:', error);
+                });
+        }
+
+        function showResults(message, downloadUrl) {
+            document.getElementById('resultsMessage').textContent = message;
+            document.getElementById('downloadLink').href = downloadUrl;
+            resultsSection.style.display = 'block';
+        }
+
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            errorSection.style.display = 'block';
+        }
+
+        function resetSections() {
+            progressSection.style.display = 'none';
+            resultsSection.style.display = 'none';
+            errorSection.style.display = 'none';
+        }
+
+        function resetForm() {
+            clearFile();
+            resetSections();
+        }
+    </script>
+</body>
+
+</html>
