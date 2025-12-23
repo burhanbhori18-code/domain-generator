@@ -38,7 +38,11 @@ def process_excel_file(filepath):
     Process the uploaded Excel file and generate domain files organized by campaign.
     Returns the path to the output ZIP file.
     """
-    wb = openpyxl.load_workbook(filepath)
+    print(f"[{datetime.now()}] Starting file processing: {filepath}")
+    
+    # Load workbook with data_only=True for speed (we only need values)
+    wb = openpyxl.load_workbook(filepath, data_only=True)
+    print(f"[{datetime.now()}] Workbook loaded. Sheets: {wb.sheetnames}")
     
     # Check if Sheet1 exists
     if 'Sheet1' not in wb.sheetnames:
@@ -56,59 +60,71 @@ def process_excel_file(filepath):
     campaign_files = {}  # {campaign_name: [list of TAL filenames]}
     total_files_created = 0
     
-    # Process TAL entries from Sheet1
+    # Initialize cache for campaign data keys: campaign_name, values: country_domains dict
+    campaign_cache = {} 
+    
+    # Iterate Sheet1 rows
+    # Convert generator to list to avoid keeping Sheet1 open if not needed, 
+    # but more importantly to get a count or simple iteration
+    
+    processed_count = 0
+    
     for row_idx, row in enumerate(ws1.iter_rows(min_row=2, values_only=False), start=2):
-        # Clear result columns (D, E, F) - shifted due to new Campaign column
+        # Stop if row is empty (first 3 columns empty)
+        if not row[0].value and not row[1].value and not row[2].value:
+            continue
+            
+        print(f"[{datetime.now()}] Processing Sheet1 Row {row_idx}")
+        
+        # Clear result columns (D, E, F)
         ws1.cell(row=row_idx, column=4).value = None
         ws1.cell(row=row_idx, column=5).value = None
         ws1.cell(row=row_idx, column=6).value = None
         
-        # Read TAL Name (Column A)
+        # Read Data
         tal_name = str(row[0].value).strip() if row[0].value else ""
         if not tal_name:
             continue
-        
-        # Read Countries (Column B)
+            
         countries_str = str(row[1].value) if row[1].value else ""
         countries_arr = [c.strip() for c in countries_str.split(',') if c.strip()]
         
-        # Read Campaign (Column C)
         campaign_name = str(row[2].value).strip() if row[2].value else ""
         if not campaign_name:
             ws1.cell(row=row_idx, column=4).value = "No"
-            ws1.cell(row=row_idx, column=5).value = 0
-            ws1.cell(row=row_idx, column=6).value = "Missing campaign name in Column C"
+            ws1.cell(row=row_idx, column=6).value = "Missing campaign name"
             continue
         
         # Check if campaign sheet exists
         if campaign_name not in wb.sheetnames:
             ws1.cell(row=row_idx, column=4).value = "No"
-            ws1.cell(row=row_idx, column=5).value = 0
-            ws1.cell(row=row_idx, column=6).value = f"Missing campaign sheet: {campaign_name}"
+            ws1.cell(row=row_idx, column=6).value = f"Missing sheet: {campaign_name}"
             continue
-        
-        # Get country-domain dictionary (from cache or build it)
-        if campaign_name in campaign_files: # Re-using campaign_files dict as a check if we processed this campaign, but better to use specific cache
-            pass 
-        
-        # We need a separate cache because we might have processed the file but need the data again
-        # Let's verify if we already built the cache for this campaign
-        if not hasattr(process_excel_file, 'campaign_cache'):
-             process_excel_file.campaign_cache = {}
-             
-        # Actually, let's just use a local dictionary for this request
-        if 'campaign_cache' not in locals():
-            campaign_cache = {}
             
+        # --- CACHING LOGIC ---
         if campaign_name not in campaign_cache:
-            # Build country-domain dictionary from campaign sheet
+            print(f"[{datetime.now()}] Caching campaign sheet: {campaign_name}")
             campaign_sheet = wb[campaign_name]
             country_domains = {}
             
-            for data_row in campaign_sheet.iter_rows(min_row=2, values_only=False):
-                if data_row[0].value and data_row[1].value:
-                    clean_country = normalize_country(str(data_row[0].value))
-                    domain_value = str(data_row[1].value).strip()
+            # Use values_only=True for faster reading
+            # Iterate rows, stop if empty to prevent processing million rows
+            empty_streak = 0
+            for data_row in campaign_sheet.iter_rows(min_row=2, values_only=True):
+                country_val = data_row[0]
+                domain_val = data_row[1]
+                
+                # Check for empty row to break early
+                if not country_val and not domain_val:
+                    empty_streak += 1
+                    if empty_streak > 10: # Stop after 10 empty rows
+                        break
+                    continue
+                empty_streak = 0
+                
+                if country_val and domain_val:
+                    clean_country = normalize_country(str(country_val))
+                    domain_value = str(domain_val).strip()
                     
                     if clean_country and domain_value:
                         if clean_country not in country_domains:
@@ -120,9 +136,10 @@ def process_excel_file(filepath):
             
             campaign_cache[campaign_name] = country_domains
         
+        # Retrieve from cache
         country_domains = campaign_cache[campaign_name]
         
-        # Check which countries are missing (but still process available ones)
+        # --- VALIDATION ---
         missing_countries = []
         available_countries = []
         
@@ -133,81 +150,70 @@ def process_excel_file(filepath):
             else:
                 available_countries.append(country)
         
-        # If NO countries are available, skip this TAL
         if not available_countries:
             ws1.cell(row=row_idx, column=4).value = "No"
             ws1.cell(row=row_idx, column=5).value = 0
-            ws1.cell(row=row_idx, column=6).value = f"All countries missing in {campaign_name}: {', '.join(missing_countries)}"
+            ws1.cell(row=row_idx, column=6).value = f"All countries missing: {', '.join(missing_countries)}"
             continue
-        
-        # Collect domains from available countries only
+            
+        # --- COLLECTION ---
         collected_domains = {}
         has_duplicate = False
         
         for country in available_countries:
             clean_country = normalize_country(country)
-            
             for domain_lower, domain_value in country_domains[clean_country].items():
                 if domain_lower in collected_domains:
                     has_duplicate = True
                 else:
                     collected_domains[domain_lower] = domain_value
         
-        # Create campaign folder if doesn't exist
+        # --- FILE CREATION ---
         campaign_folder = os.path.join(output_folder, campaign_name)
         os.makedirs(campaign_folder, exist_ok=True)
         
-        # Create output Excel file for this TAL
         wb_out = Workbook()
         ws_out = wb_out.active
         
         for idx, domain_value in enumerate(collected_domains.values(), start=1):
             ws_out.cell(row=idx, column=1).value = domain_value
-        
-        # Save file in campaign folder
+            
         output_filename = f"{tal_name}.xlsx"
         output_path = os.path.join(campaign_folder, output_filename)
         wb_out.save(output_path)
         
-        # Track file for this campaign
         if campaign_name not in campaign_files:
             campaign_files[campaign_name] = []
         campaign_files[campaign_name].append(output_filename)
         total_files_created += 1
         
-        # Update Sheet1 with results (columns D, E, F)
-        # Column D: "Yes" if all countries found, "Partial" if some missing
+        # Log success
         if missing_countries:
             ws1.cell(row=row_idx, column=4).value = "Partial"
-            ws1.cell(row=row_idx, column=6).value = f"Missing countries: {', '.join(missing_countries)}"
+            ws1.cell(row=row_idx, column=6).value = f"Missing: {', '.join(missing_countries)}"
         else:
             ws1.cell(row=row_idx, column=4).value = "Yes"
             ws1.cell(row=row_idx, column=6).value = "Yes" if has_duplicate else "No"
-        
+            
         ws1.cell(row=row_idx, column=5).value = len(collected_domains)
-
+        processed_count += 1
+        
+    print(f"[{datetime.now()}] Processing complete. Files created: {total_files_created}")
     
     # Save updated master file
     master_output_path = os.path.join(output_folder, "Master_Results.xlsx")
     wb.save(master_output_path)
     
-    # Create ZIP file with campaign folder structure
+    # Create ZIP file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_filename = f"domain_files_{timestamp}.zip"
     zip_path = os.path.join(output_folder, zip_filename)
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        # Add master file to root of ZIP
         zipf.write(master_output_path, "Master_Results.xlsx")
-        
-        # Add campaign folders with their files
         for campaign_name, filenames in campaign_files.items():
             campaign_folder = os.path.join(output_folder, campaign_name)
-            
-            # Add Master_Results.xlsx to each campaign folder
             zipf.write(master_output_path, f"{campaign_name}/Master_Results.xlsx")
-            
-            # Add individual TAL files
             for filename in filenames:
                 file_path = os.path.join(campaign_folder, filename)
                 zipf.write(file_path, f"{campaign_name}/{filename}")
